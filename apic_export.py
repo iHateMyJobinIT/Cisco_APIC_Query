@@ -52,6 +52,17 @@ TENANT_MO_CLASSES = {
     "fvRsProv":  "Contract_Provider_Bindings",
 }
 
+# Fabric-level policy objects needed to support tenant configs in a lab.
+# These are the "glue" — AEPs, domains, and VLAN pools that tenants
+# reference. Without them, EPG domain associations fail on import.
+FABRIC_POLICY_CLASSES = {
+    "infraAttEntityP": "AEPs",
+    "physDomP":        "Physical_Domains",
+    "l3extDomP":       "L3_Domains",
+    "vmmDomP":         "VMM_Domains",
+    "fvnsVlanInstP":   "VLAN_Pools",
+}
+
 # Page size for queries (APIC default max is 100000)
 PAGE_SIZE = 50000
 
@@ -148,6 +159,20 @@ class APICSession:
 
         return all_objects
 
+    def get_mo_full_tree(self, dn: str) -> dict:
+        """Fetch any MO with its full config subtree."""
+        url = f"{self.base_url}/api/mo/{dn}.json"
+        params = {
+            "rsp-subtree": "full",
+            "rsp-prop-include": "config-only",
+        }
+        resp = self.session.get(url, params=params, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("imdata"):
+            return data["imdata"][0]
+        return {}
+
     def get_tenant_full_tree(self, tenant_dn: str) -> dict:
         """
         Fetch a single tenant with its full subtree (all children
@@ -205,6 +230,44 @@ def export_class_objects(apic: APICSession, export_dir: str) -> dict:
             combined[mo_class] = []
 
     return combined
+
+
+def export_fabric_policies(apic: APICSession, export_dir: str) -> dict:
+    """
+    Export fabric-level policy objects (AEPs, domains, VLAN pools)
+    with full subtrees so they can be recreated on a lab APIC.
+    """
+    fabric_data: dict = {}
+
+    for mo_class, friendly_name in FABRIC_POLICY_CLASSES.items():
+        print(f"Fetching {friendly_name} ({mo_class}) ...")
+        try:
+            objects = apic.get_class(
+                mo_class,
+                query_params={"rsp-prop-include": "config-only"},
+            )
+            print(f"  Found {len(objects)} {friendly_name}")
+
+            # Fetch each object's full subtree for complete config
+            full_trees = []
+            for obj in objects:
+                attrs = obj[mo_class]["attributes"]
+                dn = attrs["dn"]
+                tree = apic.get_mo_full_tree(dn)
+                if tree:
+                    full_trees.append(tree)
+
+            fabric_data[mo_class] = full_trees
+
+            save_json(
+                {"totalCount": str(len(full_trees)), "imdata": full_trees},
+                os.path.join(export_dir, "fabric_policies", f"{friendly_name}.json"),
+            )
+        except requests.HTTPError as exc:
+            print(f"  WARNING: Failed to fetch {mo_class}: {exc}")
+            fabric_data[mo_class] = []
+
+    return fabric_data
 
 
 def export_tenant_trees(apic: APICSession, export_dir: str) -> list:
@@ -285,6 +348,13 @@ def main() -> None:
             os.path.join(export_dir, "all_tenants_full.json"),
         )
 
+        # 3 ── Fabric-level policies (AEPs, domains, VLAN pools)
+        print()
+        print("-" * 64)
+        print("Phase 3: Exporting fabric policies (AEPs, domains, VLAN pools)")
+        print("-" * 64)
+        fabric_data = export_fabric_policies(apic, export_dir)
+
         # Summary
         print()
         print("=" * 64)
@@ -294,9 +364,11 @@ def main() -> None:
         print(f"  Tenant trees:     {len(tenant_trees)}")
         total_objs = sum(len(v) for v in combined.values())
         print(f"  Total objects:    {total_objs}")
+        total_fabric = sum(len(v) for v in fabric_data.values())
+        print(f"  Fabric policies:  {total_fabric}")
         print()
-        print("  To import a tenant into your lab APIC, POST the tenant")
-        print("  JSON file to: https://<lab-apic>/api/mo/uni.json")
+        print("  Use apic_lab_import.py to import into your lab APIC.")
+        print("  Hardware-specific bindings will be stripped automatically.")
         print("=" * 64)
 
     except requests.HTTPError as exc:

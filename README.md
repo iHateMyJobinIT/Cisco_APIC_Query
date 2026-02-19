@@ -54,7 +54,23 @@ exports/apic_export_<timestamp>/
 
 ## Importing Into Lab
 
-To recreate a tenant in your lab APIC, POST the per-tenant JSON:
+### Automated (recommended)
+
+```bash
+# Import using the most recent export (auto-detected)
+python apic_lab_import.py
+
+# Or specify an export directory explicitly
+python apic_lab_import.py exports/apic_export_20260219_095402
+```
+
+The import script will:
+1. Show you what tenants will be imported and ask for confirmation
+2. **Delete** all non-built-in tenants on the lab APIC (keeps `infra`, `common`, `mgmt`)
+3. **Import** each production tenant from the `by_tenant/` export files
+4. Report success/failure per tenant
+
+### Manual (curl)
 
 ```bash
 curl -k -X POST \
