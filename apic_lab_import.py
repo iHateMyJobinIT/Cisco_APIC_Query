@@ -41,31 +41,28 @@ LAB_USERNAME = "admin"
 PROTECTED_TENANTS = {"infra", "common", "mgmt"}
 
 # ---------------------------------------------------------------------------
-# Hardware-specific MO classes to STRIP from tenant subtrees.
+# MO classes to STRIP from tenant subtrees.
 #
-# These reference production leaf/spine node IDs, physical ports, and
-# interface paths that don't exist in the lab. Removing them lets the
-# logical policy structure (tenants/VRFs/BDs/EPGs/contracts) import
-# cleanly without errors.
+# Hardware-specific bindings (paths, nodes) and L3Out routing configs
+# are removed so tenants import cleanly into a lab. What remains is the
+# logical structure: Tenants, VRFs, BDs, Subnets, App Profiles, EPGs,
+# Contracts, Filters — everything needed to test VLAN / trunking / VPC
+# scripting against a realistic policy model.
 # ---------------------------------------------------------------------------
 STRIP_MO_CLASSES = {
-    # EPG static bindings → specific leaf/port/vPC paths
-    "fvRsPathAtt",
-    # EPG static node bindings → specific leaf node IDs
-    "fvRsNodeAtt",
-    # L3Out node-level associations → specific node IDs (e.g. node-201)
-    "l3extRsNodeL3OutAtt",
-    # L3Out interface path attachments → specific physical interfaces
-    "l3extRsPathL3OutAtt",
-    # Static endpoint entries
+    # ── L3Out / routing (entire subtree) ──────────────────────────
+    # Strips all OSPF, BGP, EIGRP, node profiles, interface profiles,
+    # external EPGs, and subnets under every L3Out in one shot.
+    "l3extOut",
+    # ── EPG hardware bindings ─────────────────────────────────────
+    "fvRsPathAtt",          # static path bindings (leaf/port/vPC)
+    "fvRsNodeAtt",          # static node bindings (leaf IDs)
+    # ── Static endpoints ──────────────────────────────────────────
     "fvStCEp",
     "fvStIp",
-    # Fabric path endpoint references
     "fvNodeConnEp",
-    # L3Out member interfaces (SVI/routed sub-interface paths)
-    "l3extMember",
-    # Deprecated in ACI 6.1(2f) — endpoint-to-endpoint debug/traceability
-    "dbgacEpToEp",
+    # ── Deprecated classes ────────────────────────────────────────
+    "dbgacEpToEp",          # removed in ACI 6.1(2f)
 }
 
 # MO classes to strip from fabric policy objects (AEPs).
@@ -77,12 +74,13 @@ STRIP_FABRIC_MO_CLASSES = {
 }
 
 # Attributes to scrub from specific MO classes.
-# OSPF interface profiles exported from prod may have empty authKey
-# values that newer APIC firmware rejects. Since networking doesn't
-# need to function in the lab, we just drop these attributes.
+# OSPF interface profiles exported from prod may have authType set to
+# "md5" or "simple" with an empty authKey. Newer APIC firmware rejects
+# that combo. We scrub ALL three auth attrs so authType falls back to
+# its default ("none") and no key is required.
 SCRUB_ATTRIBUTES = {
-    "ospfIfP":  {"authKey", "authKeyId"},
-    "ospfIfPol": {"authKey", "authKeyId"},
+    "ospfIfP":  {"authKey", "authKeyId", "authType"},
+    "ospfIfPol": {"authKey", "authKeyId", "authType"},
 }
 
 
