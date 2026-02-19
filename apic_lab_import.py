@@ -77,12 +77,13 @@ STRIP_FABRIC_MO_CLASSES = {
 }
 
 # Attributes to scrub from specific MO classes.
-# OSPF interface profiles exported from prod may have empty authKey
-# values that newer APIC firmware rejects. Since networking doesn't
-# need to function in the lab, we just drop these attributes.
+# OSPF interface profiles exported from prod may have authType set to
+# "md5" or "simple" with an empty authKey. Newer APIC firmware rejects
+# that combo. We scrub ALL three auth attrs so authType falls back to
+# its default ("none") and no key is required.
 SCRUB_ATTRIBUTES = {
-    "ospfIfP":  {"authKey", "authKeyId"},
-    "ospfIfPol": {"authKey", "authKeyId"},
+    "ospfIfP":  {"authKey", "authKeyId", "authType"},
+    "ospfIfPol": {"authKey", "authKeyId", "authType"},
 }
 
 
