@@ -64,6 +64,25 @@ STRIP_MO_CLASSES = {
     "fvNodeConnEp",
     # L3Out member interfaces (SVI/routed sub-interface paths)
     "l3extMember",
+    # Deprecated in ACI 6.1(2f) — endpoint-to-endpoint debug/traceability
+    "dbgacEpToEp",
+}
+
+# MO classes to strip from fabric policy objects (AEPs).
+# infraProvAcc / infraRsFuncToEpg bind AEPs to the infra tenant's EPGs
+# with VLAN encaps that conflict with the lab's own infra VLAN setup.
+STRIP_FABRIC_MO_CLASSES = {
+    "infraProvAcc",
+    "infraRsFuncToEpg",
+}
+
+# Attributes to scrub from specific MO classes.
+# OSPF interface profiles exported from prod may have empty authKey
+# values that newer APIC firmware rejects. Since networking doesn't
+# need to function in the lab, we just drop these attributes.
+SCRUB_ATTRIBUTES = {
+    "ospfIfP":  {"authKey", "authKeyId"},
+    "ospfIfPol": {"authKey", "authKeyId"},
 }
 
 
@@ -152,10 +171,13 @@ class APICSession:
 # ---------------------------------------------------------------------------
 # Sanitizer — strip hardware-specific bindings from tenant subtrees
 # ---------------------------------------------------------------------------
-def sanitize_tree(node: dict) -> dict:
+def sanitize_tree(node: dict, strip_classes: set | None = None) -> dict:
     """
-    Recursively walk an ACI MO tree and remove children whose class
-    name is in STRIP_MO_CLASSES. Returns a deep-copied, cleaned tree.
+    Recursively walk an ACI MO tree and:
+      1. Remove children whose class is in strip_classes
+      2. Scrub problematic attributes (OSPF auth keys, etc.)
+
+    Returns a deep-copied, cleaned tree.
 
     ACI JSON structure:
         { "fvAEPg": { "attributes": {...}, "children": [ ... ] } }
@@ -163,23 +185,30 @@ def sanitize_tree(node: dict) -> dict:
     Each child in the children list is itself a dict with a single key
     (the MO class name).
     """
+    if strip_classes is None:
+        strip_classes = STRIP_MO_CLASSES
+
     cleaned = {}
 
     for mo_class, mo_body in node.items():
         new_body = {}
 
-        # Copy attributes as-is
+        # Copy attributes, scrubbing problematic ones
         if "attributes" in mo_body:
-            new_body["attributes"] = copy.deepcopy(mo_body["attributes"])
+            attrs = copy.deepcopy(mo_body["attributes"])
+            if mo_class in SCRUB_ATTRIBUTES:
+                for attr_name in SCRUB_ATTRIBUTES[mo_class]:
+                    attrs.pop(attr_name, None)
+            new_body["attributes"] = attrs
 
         # Recursively process children, stripping blacklisted classes
         if "children" in mo_body:
             new_children = []
             for child in mo_body["children"]:
                 child_class = next(iter(child))
-                if child_class in STRIP_MO_CLASSES:
+                if child_class in strip_classes:
                     continue  # strip this child
-                sanitized_child = sanitize_tree(child)
+                sanitized_child = sanitize_tree(child, strip_classes)
                 new_children.append(sanitized_child)
 
             if new_children:
@@ -258,6 +287,11 @@ def import_fabric_policies(apic: APICSession, export_dir: str) -> tuple[int, int
         print(f"  Importing {len(objects)} {friendly_name} ...")
 
         for obj in objects:
+            # Sanitize AEPs — strip infra EPG bindings that conflict
+            # with the lab's own infra VLAN assignments
+            if mo_class == "infraAttEntityP":
+                obj = sanitize_tree(obj, strip_classes=STRIP_FABRIC_MO_CLASSES)
+
             attrs = obj[mo_class]["attributes"]
             name = attrs.get("name", attrs.get("dn", "?"))
             try:
